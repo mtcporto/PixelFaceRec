@@ -1,39 +1,47 @@
 # Reconhecimento Facial com Face API
+- Customizado para o projeto **Pixelvivo**.
 
-Este projeto é uma aplicação web para reconhecimento facial utilizando a biblioteca Face API. Ele permite o cadastro de usuários com imagens faciais e realiza o reconhecimento em tempo real utilizando a câmera do dispositivo.
+Este projeto é uma aplicação web para reconhecimento facial seguro, desenvolvida para a Pixelvivo, que utiliza a biblioteca Face API e inclui detecção de vivacidade (liveness) para assegurar que o usuário está presente e consciente durante o reconhecimento.
 
 ## Funcionalidades
 
-- **Cadastro de Usuários**: Permite o envio de imagens faciais e o registro de nomes associados.
-- **Reconhecimento Facial em Tempo Real**: Utiliza a câmera do dispositivo para detectar e reconhecer rostos cadastrados.
-- **Interface Intuitiva**: Interface simples e responsiva para facilitar o uso.
+- **Cadastro de Usuários**: Envio de imagens faciais e registro de nomes associados.
+- **Reconhecimento Facial em Tempo Real**: Usa a câmera do dispositivo para detectar e reconhecer rostos cadastrados.
+- **Detecção de Vivacidade (Liveness Check)**: Verifica sorrisos para confirmar que o rosto capturado é de uma pessoa viva, prevenindo ataques de fotos ou vídeos.
+- **Opções Configuráveis**: Permite habilitar/desabilitar a caixa de reconhecimento facial e a exibição de nomes na interface.
+- **Interface Intuitiva**: Design responsivo e focado em segurança.
 
 ## Tecnologias Utilizadas
 
-- **HTML5**: Estrutura da aplicação.
-- **CSS3**: Estilização da interface, incluindo uso de classes do Bootstrap.
-- **JavaScript**: Lógica da aplicação, manipulação do DOM e integração com bibliotecas.
-- **Bootstrap 5**: Framework CSS para design responsivo.
-- **TensorFlow.js**: Biblioteca para computação baseada em aprendizado de máquina no navegador.
-- **Face API**: Biblioteca para detecção e reconhecimento facial.
+- **HTML5**: Estrutura semântica da aplicação.
+- **CSS3**: Estilização avançada, incluindo cantos arredondados e efeitos de sombra.
+- **JavaScript**: Lógica de cadastro, detecção e reconhecimento facial, implementação de configurações dinâmicas.
+- **Bootstrap 5**: Componentes e layout responsivo.
+- **TensorFlow.js**: Engine de aprendizado de máquina executada no navegador.
+- **Face API**: Framework para detecção de faces, extração de landmarks e reconhecimento.
+- **Face Expression Net**: Utilizado para o **liveness check**, detectando expressões faciais como sorriso.
 
 ## Como Funciona
 
 1. **Cadastro de Usuários**:
-   - O usuário pode enviar uma imagem e associá-la a um nome.
-   - As informações faciais são processadas e armazenadas para reconhecimento futuro.
+   - Envie uma imagem e associe-a a um nome.
+   - O sistema extrai descritores faciais e armazena para comparações futuras.
 
 2. **Reconhecimento Facial**:
-   - A câmera do dispositivo é ativada.
-   - O sistema detecta rostos em tempo real e tenta reconhecê-los com base nos dados cadastrados.
+   - Ative a câmera; o sistema desenha uma caixa ao redor do rosto detectado.
+   - Se configurado, exibe o nome acima da caixa de reconhecimento.
+   - Antes do reconhecimento, o liveness check solicita que o usuário sorria para validação.
 
-3. **Exibição de Resultados**:
-   - O sistema exibe mensagens indicando se o rosto foi reconhecido ou não.
+3. **Feedback e Segurança**:
+   - Mensagens indicam status de vivacidade e resultados de reconhecimento.
+   - Opções nas configurações permitem personalizar threshold de correspondência, vivacidade e exibição de caixas.
 
 ## Estrutura do Projeto
 
-- **index.html**: Contém a estrutura principal da aplicação, incluindo o código JavaScript para lógica de cadastro e reconhecimento facial.
-- **Modelos**: Os modelos necessários para o funcionamento da Face API devem ser armazenados na pasta `./models/`.
+- **index.html**: Layout principal e modais de cadastro/configurações.
+- **styles.css**: Temas de interface e estilos de caixas de reconhecimento.
+- **scripts.js**: Lógica de inicialização, cadastro, detecção e reconhecimento.
+- **models/**: Modelos da Face API e redes para detecção e reconhecimento.
 
 ## Requisitos
 
@@ -52,3 +60,4 @@ Este projeto é uma aplicação web para reconhecimento facial utilizando a bibl
 - Para melhor desempenho, utilize imagens de boa qualidade e iluminação adequada.
 
 ---
+*Atualização: mudança implementada para o projeto da Pixelvivo.*
