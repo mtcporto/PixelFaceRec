@@ -1,7 +1,7 @@
 import('https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js');
 
 const MODELS_PATH = './models/';
-const FACE_MATCH_THRESHOLD = 0.6;
+let FACE_MATCH_THRESHOLD = 0.6; // Now let instead of const so we can modify it in settings
 const MESSAGE_TIMEOUT = 3000; // 3 segundos para mensagens temporárias
 
 // Elementos do DOM
@@ -59,6 +59,11 @@ openCadastroBtn.addEventListener('click', function() {
     resetCadastroForm();
     const modal = new bootstrap.Modal(cadastroModal);
     modal.show();
+    // Se o modal de configurações estiver aberto, feche-o
+    const settingsModal = bootstrap.Modal.getInstance(document.getElementById('settingsModal'));
+    if (settingsModal) {
+        settingsModal.hide();
+    }
 });
 
 function removeUserField(e) {
@@ -140,6 +145,12 @@ let faceMatcher = null;
 let recognitionTimer = null;
 let statusTimer = null;
 
+let livenessRequired = true;
+let livenessPassed = false;
+let smileDetected = false;
+let showFaceBox = true; // Controle para caixa de reconhecimento facial
+let showNameInBox = true; // Controle para exibição do nome na caixa de reconhecimento
+
 // Funções de controle de mensagens de status
 function showSystemStatus(message) {
     systemStatusElement.textContent = message;
@@ -173,8 +184,15 @@ function showRecognitionStatus(message, duration = MESSAGE_TIMEOUT) {
 }
 
 function showRecognitionMessage(message, isRecognized) {
+    // Se não tem mensagem, esconde o elemento
+    if (!message) {
+        recognitionMessageElement.style.display = 'none';
+        return;
+    }
+    
     recognitionMessageElement.textContent = message;
     recognitionMessageElement.classList.remove('recognized', 'not-recognized');
+    recognitionMessageElement.style.display = 'block';
     
     if (isRecognized === true) {
         recognitionMessageElement.classList.add('recognized');
@@ -188,10 +206,15 @@ function showRecognitionMessage(message, isRecognized) {
     }
 }
 
+function showLivenessInstruction() {
+    showRecognitionStatus('Por favor, sorria para autenticação (detecção de vivacidade).', 0);
+}
+
 // Gerenciamento de faces cadastradas
 function updateFaceMatcher() {
     if (labeledFaceDescriptors.length > 0) {
         faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, FACE_MATCH_THRESHOLD);
+        if (window.suppressLogs) return;
         console.log("Face matcher atualizado com:", labeledFaceDescriptors.map(ld => ld.label));
     } else {
         faceMatcher = null;
@@ -237,11 +260,19 @@ function loadUsersFromLocalStorage() {
             `;
             faceList.appendChild(faceItem);
         });
-    } catch {}
+    } catch { /* warning suprimido */ }
+}
+
+// Spinner overlay helpers
+function showLoading(show = true) {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.classList.toggle('active', show);
+    return () => showLoading(false); // Return function to hide loading for promise chaining
 }
 
 // Inicialização de modelos e câmera
 async function loadFaceApiModels() {
+    showLoading(true);
     showSystemStatus('Carregando modelos de reconhecimento facial...');
     try {
         window.removeFace = removeFace;
@@ -249,21 +280,27 @@ async function loadFaceApiModels() {
         await Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri(MODELS_PATH),
             faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_PATH),
-            faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_PATH)
+            faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_PATH),
+            faceapi.nets.faceExpressionNet.loadFromUri(MODELS_PATH) // <-- Adicionado para corrigir erro
         ]);
 
         faceApiReady = true;
+        if (window.suppressLogs) return;
         console.log('Modelos Face-API carregados!');
         hideSystemStatus();
+        showLoading(false);
     } catch (error) {
+        if (window.suppressLogs) return;
         console.error('Erro ao carregar modelos Face-API:', error);
         showSystemStatus(`Erro ao carregar modelos faciais: ${error.message}`);
         alert(`Erro ao carregar modelos faciais: ${error.message}. Verifique se os modelos estão na pasta: ${MODELS_PATH}`);
+        showLoading(false);
         throw error;
     }
 }
 
 async function startCamera() {
+    showLoading(true);
     if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
     }
@@ -285,13 +322,17 @@ async function startCamera() {
             video.onloadedmetadata = () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
+                if (window.suppressLogs) return;
                 console.log(`Canvas dimensionado para: ${canvas.width}x${canvas.height}`);
+                showLoading(false);
                 resolve();
             };
         });
     } catch (err) {
+        if (window.suppressLogs) return;
         console.error("Erro ao acessar a webcam: ", err);
         showRecognitionStatus('Erro ao acessar a câmera. Verifique as permissões.', 0);
+        showLoading(false);
         throw err;
     }
 }
@@ -365,6 +406,7 @@ async function registerFaceFromImage() {
             showCadastroStatus('Nenhuma face detectada na imagem. Tente outra.');
         }
     } catch (error) {
+        if (window.suppressLogs) return;
         console.error('Erro ao processar imagem:', error);
         showCadastroStatus('Erro ao processar imagem. Tente novamente.');
     }
@@ -387,12 +429,31 @@ async function detectFaces() {
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
         const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions())
             .withFaceLandmarks()
-            .withFaceDescriptors();
+            .withFaceDescriptors()
+            .withFaceExpressions();
 
         context.clearRect(0, 0, canvas.width, canvas.height);
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (detections.length > 0) {
+            const detection = detections[0];
+            // --- LIVENESS CHECK: Sorriso ---
+            if (livenessRequired) {
+                const expressions = detection.expressions;
+                if (expressions && expressions.happy > 0.7) {
+                    smileDetected = true;
+                    livenessPassed = true;
+                    livenessRequired = false;
+                    showRecognitionStatus('Vivacidade confirmada! Prosseguindo com reconhecimento...', 2000);
+                }
+                if (!livenessPassed) {
+                    showLivenessInstruction();
+                    isProcessing = false;
+                    requestAnimationFrame(detectFaces);
+                    return;
+                }
+            }
+            // --- FIM LIVENESS ---
             detections.forEach(detection => {
                 const box = detection.detection.box;
                 
@@ -400,12 +461,19 @@ async function detectFaces() {
                     const match = faceMatcher.findBestMatch(detection.descriptor);
                     const label = match.label;
                     const now = new Date();
-
+                    
                     if (label === 'unknown') {
                         // Se o usuário é desconhecido ou diferente do último reconhecido
                         if (lastRecognizedName !== 'unknown') {
                             const timestamp = now.toLocaleString();
                             showRecognitionMessage(`Usuário não reconhecido em ${timestamp}`, false);
+                            
+                            // Mostrar indicador no rosto se configurado
+                            if (showFaceBox) {
+                                // Adiciona o indicador "Não reconhecido" na testa
+                                addFaceStatusIndicator(box, 'Não reconhecido', 'unknown');
+                            }
+                            
                             lastRecognizedName = 'unknown';
                             lastRecognitionTime = now;
                         }
@@ -419,23 +487,41 @@ async function detectFaces() {
                         if (shouldUpdate) {
                             const timestamp = now.toLocaleString();
                             showRecognitionMessage(`Usuário ${label} reconhecido em ${timestamp}`, true);
+                            
+                            // Mostrar indicador no rosto se configurado
+                            if (showFaceBox) {
+                                // Adiciona o nome do usuário na testa
+                                addFaceStatusIndicator(box, label, 'recognized');
+                            }
+                            
                             lastRecognizedName = label;
                             lastRecognitionTime = now;
                         }
                     }
-
-                    const drawBox = new faceapi.draw.DrawBox(box, { 
-                        label: label,
-                        boxColor: label === 'unknown' ? 'red' : 'green'
-                    });
-                    drawBox.draw(canvas);
-                } else {
-                    // Se não há faces cadastradas, apenas mostra a detecção
-                    const drawBox = new faceapi.draw.DrawBox(box, { 
-                        label: 'Rosto detectado',
-                        boxColor: 'blue'
-                    });
-                    drawBox.draw(canvas);
+                    
+                    // Desenha a caixa apenas se a configuração estiver ativada
+                    if (showFaceBox) {
+                        const drawOptions = { 
+                            label: '', // Removemos o label da caixa (será exibido pelo addFaceStatusIndicator)
+                            boxColor: label === 'unknown' ? 'red' : 'green',
+                            lineWidth: 2  // Espessura da linha da caixa mais fina
+                        };
+                        
+                        const drawBox = new faceapi.draw.DrawBox(box, drawOptions);
+                        drawBox.draw(canvas);
+                    }} else {
+                    // Se não há faces cadastradas, apenas mostra a detecção se configurado
+                    if (showFaceBox) {
+                        const drawBox = new faceapi.draw.DrawBox(box, { 
+                            label: '', // Removemos o label da caixa
+                            boxColor: 'blue',
+                            lineWidth: 2
+                        });
+                        drawBox.draw(canvas);
+                        
+                        // Adiciona "Rosto detectado" na testa
+                        addFaceStatusIndicator(box, 'Rosto detectado', 'unknown');
+                    }
                     showRecognitionMessage('Nenhum usuário cadastrado para comparação', null);
                 }
             });
@@ -453,6 +539,7 @@ async function detectFaces() {
         }
 
     } catch (error) {
+        if (window.suppressLogs) return;
         console.error("Erro na detecção:", error);
     }
 
@@ -462,8 +549,65 @@ async function detectFaces() {
     }
 }
 
+// Função utilitária para detectar olho aberto/fechado
+function isEyeOpen(eyePoints) {
+    // Cálculo mais robusto: Eye Aspect Ratio (EAR)
+    // EAR = (|p2-p6| + |p3-p5|) / (2*|p1-p4|)
+    // p1=0, p2=1, p3=2, p4=3, p5=4, p6=5
+    const vertical1 = distance(eyePoints[1], eyePoints[5]);
+    const vertical2 = distance(eyePoints[2], eyePoints[4]);
+    const horizontal = distance(eyePoints[0], eyePoints[3]);
+    const EAR = (vertical1 + vertical2) / (2.0 * horizontal);
+    return EAR > 0.23; // threshold ajustável, pode testar 0.20~0.25
+}
+
+function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+// Adiciona indicador de status acima da caixa de reconhecimento facial
+function addFaceStatusIndicator(box, text, status) {
+    // Remove indicadores anteriores se existirem
+    removeAllFaceStatusIndicators();
+    
+    // Mostrar o nome apenas se a configuração estiver ativada
+    if (!showNameInBox) {
+        return;
+    }
+    
+    // Cria um novo elemento de indicador
+    const indicator = document.createElement('div');
+    indicator.className = `face-status-indicator face-status-${status}`;
+    indicator.textContent = text;
+    
+    // Posiciona ACIMA da caixa de reconhecimento, não sobre a face
+    indicator.style.top = `${box.top - 30}px`;
+    
+    // Centraliza horizontalmente
+    indicator.style.left = `${box.left + (box.width / 2) - (indicator.offsetWidth / 2 || 50)}px`;
+    indicator.style.width = `${Math.min(box.width * 0.9, 150)}px`;
+    
+    // Adiciona ao container do canvas
+    const canvasContainer = document.querySelector('.canvas-container');
+    canvasContainer.appendChild(indicator);
+    
+    // Ajusta a posição após renderização (para centralizar corretamente)
+    setTimeout(() => {
+        indicator.style.left = `${box.left + (box.width / 2) - (indicator.offsetWidth / 2)}px`;
+    }, 10);
+}
+
+function removeAllFaceStatusIndicators() {
+    const indicators = document.querySelectorAll('.face-status-indicator');
+    indicators.forEach(indicator => indicator.remove());
+}
+
 // Funções de controle de interface
 async function startRecognition() {
+    livenessRequired = true;
+    livenessPassed = false;
+    smileDetected = false;
+
     if (!faceApiReady) {
         alert('Os modelos de reconhecimento facial ainda não foram carregados.');
         return;
@@ -487,9 +631,24 @@ async function startRecognition() {
 
 function stopRecognition() {
     isRecognitionActive = false;
-    showRecognitionMessage('', null);
+    
+    // Mostra a mensagem final de reconhecimento baseada no último usuário reconhecido
+    if (lastRecognizedName) {
+        const now = new Date();
+        const formattedDate = now.toLocaleDateString();
+        const formattedTime = now.toLocaleTimeString();
+        const formattedDateTime = `${formattedDate}, ${formattedTime}`;
+        
+        if (lastRecognizedName === 'unknown') {
+            showRecognitionMessage(`Usuário não reconhecido em ${formattedDateTime}`, false);
+        } else {
+            showRecognitionMessage(`Usuário ${lastRecognizedName} reconhecido em ${formattedDateTime}`, true);
+        }
+    }
+    
     showRecognitionStatus('Reconhecimento facial interrompido.');
     stopCamera();
+    removeAllFaceStatusIndicators();  // Limpa quaisquer indicadores faciais
     startRecognitionButton.style.display = 'inline-block';
     stopRecognitionButton.style.display = 'none';
 }
@@ -499,6 +658,7 @@ async function init() {
     try {
         await loadFaceApiModels();
     } catch (error) {
+        if (window.suppressLogs) return;
         console.error("Erro na inicialização:", error);
     }
 }
@@ -507,10 +667,81 @@ async function init() {
 startRecognitionButton.addEventListener('click', startRecognition);
 stopRecognitionButton.addEventListener('click', stopRecognition);
 
-// Inicializar o sistema quando a página for carregada
-document.addEventListener('DOMContentLoaded', init);
+// Gerenciamento de configurações
+function initSettings() {
+    const thresholdSlider = document.getElementById('matchThreshold');
+    const thresholdValueDisplay = document.getElementById('thresholdValue');
+    const livenessCheckbox = document.getElementById('livenessCheck');
+    const showFaceBoxCheckbox = document.getElementById('showFaceBoxCheck');
+    const showNameCheckbox = document.getElementById('showNameCheck');
+    const saveSettingsBtn = document.getElementById('saveSettings');
+    
+    // Carrega configurações do localStorage
+    loadSettings();
+    
+    // Exibe valores iniciais
+    thresholdSlider.value = FACE_MATCH_THRESHOLD;
+    thresholdValueDisplay.textContent = FACE_MATCH_THRESHOLD;
+    livenessCheckbox.checked = livenessRequired;
+    showFaceBoxCheckbox.checked = showFaceBox;
+    showNameCheckbox.checked = showNameInBox;
+    
+    // Event listeners
+    thresholdSlider.addEventListener('input', function() {
+        thresholdValueDisplay.textContent = this.value;
+    });
+    
+    saveSettingsBtn.addEventListener('click', function() {
+        FACE_MATCH_THRESHOLD = parseFloat(thresholdSlider.value);
+        livenessRequired = livenessCheckbox.checked;
+        showFaceBox = showFaceBoxCheckbox.checked;
+        showNameInBox = showNameCheckbox.checked;
+        
+        // Atualiza o matcher com o novo threshold
+        if (labeledFaceDescriptors.length > 0) {
+            faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, FACE_MATCH_THRESHOLD);
+        }
+        
+        // Salva no localStorage
+        saveSettings();
+        
+        // Feedback visual
+        const modalEl = document.getElementById('settingsModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        modal.hide();
+        
+        showSystemStatus('Configurações salvas com sucesso!');
+        setTimeout(hideSystemStatus, 2000);
+    });
+}
 
-// Carrega usuários salvos ao iniciar
-window.addEventListener('DOMContentLoaded', () => {
+function saveSettings() {
+    const settings = {
+        faceMatchThreshold: FACE_MATCH_THRESHOLD,
+        livenessRequired: livenessRequired,
+        showFaceBox: showFaceBox,
+        showNameInBox: showNameInBox
+    };
+    localStorage.setItem('faceRecSettings', JSON.stringify(settings));
+}
+
+function loadSettings() {
+    try {
+        const settings = JSON.parse(localStorage.getItem('faceRecSettings'));
+        if (settings) {
+            FACE_MATCH_THRESHOLD = settings.faceMatchThreshold || 0.6;
+            livenessRequired = settings.livenessRequired !== undefined ? settings.livenessRequired : true;
+            showFaceBox = settings.showFaceBox !== undefined ? settings.showFaceBox : true;
+            showNameInBox = settings.showNameInBox !== undefined ? settings.showNameInBox : true;
+        }
+    } catch (e) {
+        console.error('Erro ao carregar configurações:', e);
+    }
+}
+
+// Inicializar o sistema quando a página for carregada
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    initSettings();
     loadUsersFromLocalStorage();
 });
