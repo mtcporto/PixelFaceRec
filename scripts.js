@@ -1,3 +1,5 @@
+import('https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js');
+
 const MODELS_PATH = './models/';
 const FACE_MATCH_THRESHOLD = 0.6;
 const MESSAGE_TIMEOUT = 3000; // 3 segundos para mensagens temporárias
@@ -16,6 +18,117 @@ const systemStatusElement = document.getElementById('systemStatus');
 const cadastroStatusElement = document.getElementById('cadastroStatus');
 const recognitionStatusElement = document.getElementById('recognitionStatus');
 const recognitionMessageElement = document.getElementById('recognitionMessage');
+
+// --- NOVO: Cadastro múltiplo de usuários ---
+const multiUserForm = document.getElementById('multiUserForm');
+const multiUserInputs = document.getElementById('multiUserInputs');
+const addUserFieldButton = document.getElementById('addUserField');
+
+function createUserInput(index) {
+    return `
+    <div class="row mb-2 user-input-row" data-index="${index}">
+        <div class="col-5">
+            <input type="text" class="form-control user-name" placeholder="Nome do usuário" required>
+        </div>
+        <div class="col-5">
+            <input type="file" class="form-control user-image" accept="image/*" required>
+        </div>
+        <div class="col-2 d-flex align-items-center">
+            <button type="button" class="btn btn-danger btn-sm remove-user-field">Remover</button>
+        </div>
+    </div>`;
+}
+
+function addUserField() {
+    const count = multiUserInputs.querySelectorAll('.user-input-row').length;
+    if (count >= 3) return;
+    multiUserInputs.insertAdjacentHTML('beforeend', createUserInput(count));
+}
+
+// Inicializa com 3 campos ao abrir o modal
+function resetCadastroForm() {
+    multiUserInputs.innerHTML = '';
+    for (let i = 0; i < 3; i++) addUserField();
+    cadastroStatusElement.style.display = 'none';
+}
+
+// Ao abrir o modal, reseta os campos
+const cadastroModal = document.getElementById('cadastroModal');
+const openCadastroBtn = document.getElementById('openCadastroBtn');
+openCadastroBtn.addEventListener('click', function() {
+    resetCadastroForm();
+    const modal = new bootstrap.Modal(cadastroModal);
+    modal.show();
+});
+
+function removeUserField(e) {
+    if (e.target.classList.contains('remove-user-field')) {
+        e.target.closest('.user-input-row').remove();
+    }
+}
+
+addUserFieldButton.addEventListener('click', addUserField);
+multiUserInputs.addEventListener('click', removeUserField);
+
+multiUserForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    if (!faceApiReady) {
+        alert('Os modelos de reconhecimento facial ainda não foram carregados.');
+        return;
+    }
+    const userRows = multiUserInputs.querySelectorAll('.user-input-row');
+    let successCount = 0;
+    for (const row of userRows) {
+        const name = row.querySelector('.user-name').value.trim();
+        const file = row.querySelector('.user-image').files[0];
+        if (!name || !file) continue;
+        showCadastroStatus(`Processando ${name}...`, 0);
+        try {
+            const img = await faceapi.bufferToImage(file);
+            const detections = await faceapi.detectAllFaces(img, new faceapi.TinyFaceDetectorOptions())
+                .withFaceLandmarks()
+                .withFaceDescriptors();
+            if (detections.length > 0) {
+                const descriptor = detections[0].descriptor;
+                const existingIndex = labeledFaceDescriptors.findIndex(fd => fd.label === name);
+                if (existingIndex >= 0) {
+                    labeledFaceDescriptors[existingIndex] = new faceapi.LabeledFaceDescriptors(name, [descriptor]);
+                    Array.from(faceList.children).forEach(item => {
+                        if (item.querySelector('span').textContent === name) {
+                            item.remove();
+                        }
+                    });
+                } else {
+                    labeledFaceDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [descriptor]));
+                }
+                // Adiciona à lista visual
+                const faceItem = document.createElement('div');
+                faceItem.className = 'face-item';
+                faceItem.innerHTML = `
+                    <span>${name}</span>
+                    <button class="btn btn-danger btn-sm" onclick="removeFace('${name}', this.parentElement)">Remover</button>
+                `;
+                faceList.appendChild(faceItem);
+                successCount++;
+            } else {
+                showCadastroStatus(`Nenhuma face detectada para ${name}.`, 2000);
+            }
+        } catch (error) {
+            showCadastroStatus(`Erro ao processar ${name}.`, 2000);
+        }
+    }
+    updateFaceMatcher();
+    if (successCount > 0) {
+        showCadastroStatus(`${successCount} usuário(s) cadastrados com sucesso!`);
+        // Limpa os campos
+        multiUserInputs.innerHTML = '';
+        for (let i = 0; i < 3; i++) addUserField();
+        // Fecha o modal após cadastro
+        const modal = bootstrap.Modal.getInstance(cadastroModal);
+        modal.hide();
+    }
+});
+// --- FIM NOVO ---
 
 // Estado da aplicação
 let currentStream = null;
@@ -83,6 +196,7 @@ function updateFaceMatcher() {
     } else {
         faceMatcher = null;
     }
+    saveUsersToLocalStorage();
 }
 
 function removeFace(name, element) {
@@ -90,6 +204,40 @@ function removeFace(name, element) {
     updateFaceMatcher();
     element.remove();
     showCadastroStatus(`Usuário ${name} removido com sucesso!`);
+}
+
+// Funções utilitárias para salvar e carregar usuários no localStorage
+function saveUsersToLocalStorage() {
+    // Salva apenas nome e array descriptor (como array simples)
+    const data = labeledFaceDescriptors.map(fd => ({
+        label: fd.label,
+        descriptor: Array.from(fd.descriptors[0])
+    }));
+    localStorage.setItem('faceUsers', JSON.stringify(data));
+}
+
+function loadUsersFromLocalStorage() {
+    const data = localStorage.getItem('faceUsers');
+    if (!data) return;
+    try {
+        const arr = JSON.parse(data);
+        labeledFaceDescriptors = arr.map(u => new faceapi.LabeledFaceDescriptors(
+            u.label,
+            [new Float32Array(u.descriptor)]
+        ));
+        updateFaceMatcher();
+        // Atualiza lista visual
+        faceList.innerHTML = '';
+        labeledFaceDescriptors.forEach(fd => {
+            const faceItem = document.createElement('div');
+            faceItem.className = 'face-item';
+            faceItem.innerHTML = `
+                <span>${fd.label}</span>
+                <button class="btn btn-danger btn-sm" onclick="removeFace('${fd.label}', this.parentElement)">Remover</button>
+            `;
+            faceList.appendChild(faceItem);
+        });
+    } catch {}
 }
 
 // Inicialização de modelos e câmera
@@ -356,9 +504,13 @@ async function init() {
 }
 
 // Event Listeners
-registerFaceButton.addEventListener('click', registerFaceFromImage);
 startRecognitionButton.addEventListener('click', startRecognition);
 stopRecognitionButton.addEventListener('click', stopRecognition);
 
 // Inicializar o sistema quando a página for carregada
 document.addEventListener('DOMContentLoaded', init);
+
+// Carrega usuários salvos ao iniciar
+window.addEventListener('DOMContentLoaded', () => {
+    loadUsersFromLocalStorage();
+});
